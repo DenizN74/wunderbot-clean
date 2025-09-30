@@ -1,0 +1,29 @@
+{
+  "pairs": [
+    {
+      "symbol": "SOLUSDT",
+      "timeframe": "15m",
+      "enabled": true,
+      "alerts": {
+        "enter_long": "LONG_OPEN_SOLUSDT_15M",
+        "exit_long": "LONG_CLOSE_SOLUSDT_15M",
+        "enter_short": "SHORT_OPEN_SOLUSDT_15M",
+        "exit_short": "SHORT_CLOSE_SOLUSDT_15M"
+      },
+      "strategy": {
+        "ema_fast": 12,
+        "ema_slow": 26,
+        "supertrend_period": 10,
+        "supertrend_multiplier": 2.0,
+        "wt_channel": 9,
+        "wt_average": 12,
+        "wt_overbought": 60,
+        "wt_oversold": -60,
+        "confirmation_mode": "Any 2 of 3",
+        "use_sl_tp": true,
+        "sl_atr_mult": 1.5,
+        "tp_atr_mult": 3.0
+      }
+    }
+  ]
+}

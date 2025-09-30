@@ -220,12 +220,11 @@ def send_alert(symbol, signal, alert_text, price):
         return False
     
     try:
-        # Form format için sadece alert parametresi
-        payload = {'alert': alert_text}
-        
+        # Sadece alert text'ini plain text olarak gönder
         response = requests.post(
             WEBHOOK_URL,
-            data=payload,
+            data=alert_text,
+            headers={'Content-Type': 'text/plain'},
             timeout=10
         )
         
@@ -233,7 +232,7 @@ def send_alert(symbol, signal, alert_text, price):
             logger.info(f"✅ {symbol} | {signal} @ ${price:.4f} | Alert: {alert_text}")
             return True
         else:
-            logger.error(f"❌ Alert hatası: {response.status_code} - {response.text}")
+            logger.error(f"❌ Alert hatası: {response.status_code} | Response: {response.text}")
             return False
             
     except Exception as e:

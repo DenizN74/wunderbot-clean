@@ -261,15 +261,13 @@ def check_pair(pair):
         signal = result['signal']
         price = result.get('price', 0)
         
-       # Pozisyon takibi
+      # Pozisyon takibi
 current_position = bot_state['positions'].get(symbol)
 
 # Alert gönder
 alert_sent = False
 
-# Her sinyal geldiğinde gönder (test için)
-if signal == 'ENTER-LONG':
-    if current_position != 'LONG':  # Sadece farklıysa gönder
+if signal == 'ENTER-LONG' and current_position != 'LONG':
             alert_sent = send_alert(symbol, signal, alerts['enter_long'], price)
             if alert_sent:
                 bot_state['positions'][symbol] = 'LONG'

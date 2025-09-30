@@ -220,22 +220,22 @@ def send_alert(symbol, signal, alert_text, price):
         return False
     
     try:
-        payload = {
-            'alert': alert_text,
-            'symbol': symbol,
-            'signal': signal,
-            'price': price,
-            'timestamp': datetime.now().isoformat()
-        }
+        # Form format için sadece alert parametresi
+        payload = {'alert': alert_text}
         
-        response = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+        response = requests.post(
+            WEBHOOK_URL,
+            data=payload,
+            timeout=10
+        )
         
         if response.status_code == 200:
             logger.info(f"✅ {symbol} | {signal} @ ${price:.4f} | Alert: {alert_text}")
             return True
         else:
-            logger.error(f"❌ Alert hatası: {response.status_code}")
+            logger.error(f"❌ Alert hatası: {response.status_code} - {response.text}")
             return False
+            
     except Exception as e:
         logger.error(f"❌ Alert gönderme hatası: {e}")
         return False

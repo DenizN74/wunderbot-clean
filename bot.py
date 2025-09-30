@@ -261,17 +261,15 @@ def check_pair(pair):
         signal = result['signal']
         price = result.get('price', 0)
         
-        # Pozisyon takibi
-        current_position = bot_state['positions'].get(symbol)
-        
-        # Log
-        if signal != 'HOLD':
-            logger.info(f"📊 {symbol} | {signal} @ ${price:.4f} | {result.get('reason', '')}")
-        
-        # Alert gönder
-        alert_sent = False
-        
-        if signal == 'ENTER-LONG' and current_position != 'LONG':
+       # Pozisyon takibi
+current_position = bot_state['positions'].get(symbol)
+
+# Alert gönder
+alert_sent = False
+
+# Her sinyal geldiğinde gönder (test için)
+if signal == 'ENTER-LONG':
+    if current_position != 'LONG':  # Sadece farklıysa gönder
             alert_sent = send_alert(symbol, signal, alerts['enter_long'], price)
             if alert_sent:
                 bot_state['positions'][symbol] = 'LONG'

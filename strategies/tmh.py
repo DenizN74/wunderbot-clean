@@ -1,4 +1,10 @@
 def analyze_tmh(df, config):
+    """
+    TMH (Triple Moving Hybrid) Strategy
+    - EMA Cross (Fast vs Slow)
+    - Supertrend Direction
+    - Confirmation logic: any_2_of_3, all_3, supertrend_only
+    """
     import pandas as pd
 
     if len(df) < 50:
@@ -29,26 +35,65 @@ def analyze_tmh(df, config):
                 st.iloc[i] = dn.iloc[i]; dirn.iloc[i] = 1
         return st, dirn
 
+    # Config parametreleri
     ema_fast = int(config.get("ema_fast", 12))
     ema_slow = int(config.get("ema_slow", 26))
     st_per   = int(config.get("supertrend_period", 10))
     st_mult  = float(config.get("supertrend_multiplier", 2.0))
+    confirmation_mode = (config.get("confirmation_mode") or "any_2_of_3").lower()
 
+    # İndikatör hesaplamaları
     ema_f = ema(df["close"], ema_fast)
     ema_s = ema(df["close"], ema_slow)
     _, st_dir = supertrend(df, st_per, st_mult)
 
     close = float(df["close"].iloc[-1])
+    
+    # Bullish/Bearish koşullar
     emaBull = (ema_f.iloc[-1] > ema_s.iloc[-1]) and (close > ema_f.iloc[-1])
     emaBear = (ema_f.iloc[-1] < ema_s.iloc[-1]) and (close < ema_f.iloc[-1])
     stBull  = st_dir.iloc[-1] == 1
     stBear  = st_dir.iloc[-1] == -1
 
-    bull = sum([emaBull, stBull])
-    bear = sum([emaBear, stBear])
+    bull_count = sum([emaBull, stBull])
+    bear_count = sum([emaBear, stBear])
 
-    if bull >= 2: return {"signal":"ENTER-LONG", "price": close}
-    if bear >= 2: return {"signal":"ENTER-SHORT","price": close}
-    if bear >= 1: return {"signal":"EXIT-LONG",  "price": close}
-    if bull >= 1: return {"signal":"EXIT-SHORT", "price": close}
+    # Confirmation mode'a göre sinyal üret
+    if confirmation_mode == "supertrend_only":
+        # Sadece Supertrend'e göre karar ver
+        if stBull and not stBear:
+            return {"signal":"ENTER-LONG", "price": close}
+        if stBear and not stBull:
+            return {"signal":"ENTER-SHORT","price": close}
+        # Exit: Supertrend ters yöne döndüğünde
+        if stBear:
+            return {"signal":"EXIT-LONG", "price": close}
+        if stBull:
+            return {"signal":"EXIT-SHORT", "price": close}
+    
+    elif confirmation_mode == "all_3":
+        # Tüm indikatörler aynı yönde olmalı (en katı)
+        # Not: 3. indikatör eklenebilir (örn: RSI, MACD)
+        if bull_count >= 2:  # Şimdilik 2 üzerinden
+            return {"signal":"ENTER-LONG", "price": close}
+        if bear_count >= 2:
+            return {"signal":"ENTER-SHORT","price": close}
+        # Exit: Herhangi biri ters yöne döndüğünde
+        if bear_count >= 1:
+            return {"signal":"EXIT-LONG", "price": close}
+        if bull_count >= 1:
+            return {"signal":"EXIT-SHORT", "price": close}
+    
+    else:  # any_2_of_3 (varsayılan)
+        # En az 2 indikatör aynı yönde olmalı
+        if bull_count >= 2:
+            return {"signal":"ENTER-LONG", "price": close}
+        if bear_count >= 2:
+            return {"signal":"ENTER-SHORT","price": close}
+        # Exit: En az 2 indikatör ters yöne döndüğünde (ENTER ile aynı mantık)
+        if bear_count >= 2:
+            return {"signal":"EXIT-LONG", "price": close}
+        if bull_count >= 2:
+            return {"signal":"EXIT-SHORT", "price": close}
+
     return {"signal":"HOLD", "price": close}

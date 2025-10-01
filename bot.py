@@ -191,13 +191,12 @@ def send_alert(symbol, signal, alert_text, price):
             logger.info(f"⏸️  {symbol} | {signal} @ ${price:.4f} | Alert recently sent, skipping")
             return False
     
- try:
-    # JSON format
-    payload = {'alert': alert_text}
-    
+try:
+    # Plain text
     response = requests.post(
         WEBHOOK_URL, 
-        json=payload,  # data= yerine json= kullan
+        data=alert_text,
+        headers={'Content-Type': 'text/plain'},
         timeout=10
     )
     )

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os, json, logging, glob, pathlib
+import os, json, logging, glob, pathlib, csv
 from datetime import datetime
 from threading import Thread
 from time import time
@@ -43,16 +43,111 @@ def send_wt(code: str, extra=None):
         logger.error(f"WT send error: {e}")
         raise
 
+# ============== HELPERS ==============
+def _as_bool(v, default=False):
+    if v is None or v == "":
+        return default
+    return str(v).strip().lower() in ("true", "1", "yes", "y", "t")
+
+def _as_int(v, default=0):
+    try:
+        s = str(v).strip()
+        if s == "": return default
+        # Türkçe locale virgülünü de destekle
+        s = s.replace(",", ".")
+        return int(float(s))
+    except Exception:
+        return default
+
+def _as_float(v, default=0.0):
+    try:
+        s = str(v).strip()
+        if s == "": return default
+        s = s.replace(",", ".")
+        return float(s)
+    except Exception:
+        return default
+
 # ============== CONFIG LOADER ==============
 BASE = pathlib.Path(__file__).parent
 
 def load_pairs():
     """
-    1) configs/*.json varsa: onları yükler
-    2) yoksa: legacy pairs.json'dan okur
+    Öncelik: Google Sheets (SHEET_URL)
+    Sonra  : configs/*.json
+    En son : legacy pairs.json
     """
-    cfg_dir = BASE / "configs"
     pairs = []
+
+    # 1) Google Sheets (CSV) — yeni arayüz
+    sheet_url = os.getenv("SHEET_URL")
+    if sheet_url:
+        try:
+            # Google Sheets "Web'de yayınla (CSV)" linkini doğrudan kullan
+            resp = requests.get(sheet_url, timeout=10)
+            resp.raise_for_status()
+            reader = csv.DictReader(resp.text.splitlines())
+
+            for row in reader:
+                symbol = (row.get("symbol") or "").strip().upper()
+                if not symbol:
+                    continue
+                if not _as_bool(row.get("enabled"), False):
+                    continue
+
+                timeframe = (row.get("timeframe") or "15m").strip()
+
+                strategy = {
+                    "type": (row.get("strategy.type") or "tmh").strip().lower(),
+                    # TMH / hibrit alanları
+                    "ema_fast":              _as_int(row.get("ema_fast"), 12),
+                    "ema_slow":              _as_int(row.get("ema_slow"), 26),
+                    "supertrend_period":     _as_int(row.get("supertrend_period"), 10),
+                    "supertrend_multiplier": _as_float(row.get("supertrend_multiplier"), 2.0),
+                    "wt_channel":            _as_int(row.get("wt_channel"), 9),
+                    "wt_average":            _as_int(row.get("wt_average"), 12),
+                    "wt_overbought":         _as_float(row.get("wt_overbought"), 60.0),
+                    "wt_oversold":           _as_float(row.get("wt_oversold"), -60.0),
+                    # SSL
+                    "ssl_period":            _as_int(row.get("ssl_period"), 10),
+                    # WT_CROSS
+                    "n1":                    _as_int(row.get("n1"), 10),
+                    "n2":                    _as_int(row.get("n2"), 21),
+                    "obLevel2":              _as_float(row.get("obLevel2"), 53.0),
+                    "osLevel2":              _as_float(row.get("osLevel2"), -53.0),
+                    "mode":                 (row.get("mode") or "").strip() or None,
+                    "enter_exit":            _as_bool(row.get("enter_exit"), False),
+                    # Genel
+                    "confirmation_mode":    (row.get("confirmation_mode") or None),
+                    "signal_on_close":       _as_bool(row.get("signal_on_close"), True),
+                }
+
+                alerts = {
+                    "enter_long":  (row.get("alerts.enter_long")  or "").strip() or None,
+                    "exit_long":   (row.get("alerts.exit_long")   or "").strip() or None,
+                    "enter_short": (row.get("alerts.enter_short") or "").strip() or None,
+                    "exit_short":  (row.get("alerts.exit_short")  or "").strip() or None,
+                    "exit_all":    (row.get("alerts.exit_all")    or "").strip() or None,
+                }
+
+                pairs.append({
+                    "symbol":    symbol,
+                    "timeframe": timeframe,
+                    "enabled":   True,
+                    "strategy":  strategy,
+                    "alerts":    alerts,
+                })
+
+            if pairs:
+                return pairs
+            else:
+                logger.warning("[sheet] Yayınlanmış CSV boş ya da hiç 'enabled' satır yok. configs/ → pairs.json'a düşüyorum.")
+
+        except Exception as e:
+            logger.error(f"[sheet] Okuma hatası, configs/ yoluna düşüyorum: {e}")
+
+    # 2) configs/*.json — mevcut sistem
+    cfg_dir = BASE / "configs"
     if cfg_dir.exists():
         for pth in sorted(glob.glob(str(cfg_dir / "*.json"))):
             try:
@@ -62,13 +157,21 @@ def load_pairs():
                     pairs.append(obj)
             except Exception as e:
                 logger.error(f"[config] {pth} okunamadı: {e}")
-    if not pairs:
-        legacy = BASE / "pairs.json"
-        if legacy.exists():
+    if pairs:
+        return pairs
+
+    # 3) legacy pairs.json — en son fallback
+    legacy = BASE / "pairs.json"
+    if legacy.exists():
+        try:
             with open(legacy, "r", encoding="utf-8") as f:
                 data = json.load(f)
             pairs = [p for p in data.get("pairs", []) if p.get("enabled", True)]
-    return pairs
+            return pairs
+        except Exception as e:
+            logger.error(f"[pairs.json] okunamadı: {e}")
+
+    return pairs  # tamamen boşsa da boş liste dön
 
 # ============== STRATEGY DISPATCHER ==============
 try:
@@ -227,7 +330,7 @@ def check_pair(pair: dict):
             if pos == "SHORT" and can_send(pair_key, signal):
                 send_wt(alerts["exit_short"]); update_after_send(pair_key, signal)
 
-        # EXIT-ALL kullanırsan şuna benzer guard ekleyebilirsin:
+        # EXIT-ALL kullanıyorsan şuna benzer guard ekleyebilirsin:
         # elif signal == "EXIT-ALL" and "exit_all" in alerts:
         #     if pos != "NONE" and can_send(pair_key, signal):
         #         send_wt(alerts["exit_all"]); update_after_send(pair_key, signal)
@@ -282,3 +385,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     logger.info(f"🌐 Server: http://0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+

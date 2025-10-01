@@ -1,0 +1,19 @@
+{
+  "symbol": "XRPUSDT",
+  "timeframe": "5m",
+  "enabled": true,
+  "alerts": {
+    "enter_long":  "ENTER-LONG_BINANCE_XRPUSDT_rdr-XRP-tmh5m_5M_c6918aa34c946d55",
+    "exit_long":   "",
+    "enter_short": "ENTER-SHORT_BINANCE_XRPUSDT_rdr-XRP-tmh5m_5M_c6918aa34c946d55",
+    "exit_short":  "",
+    "exit_all":    "EXIT-ALL_BINANCE_XRPUSDT_rdr-XRP-tmh5m_5M_c6918aa34c946d55"
+  },
+  "strategy": {
+    "type": "tmh",
+    "ema_fast": 12,
+    "ema_slow": 26,
+    "supertrend_period": 10,
+    "supertrend_multiplier": 2.0
+  }
+}

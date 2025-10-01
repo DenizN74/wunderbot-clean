@@ -15,6 +15,43 @@ from flask import Flask, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 
+# --- WT Client (drop-in) ---
+import json, requests, os, pathlib
+
+WT_URL = "https://wtalerts.com/bot/custom"
+
+# pairs.json yolunu çöz (aynı klasördeyse):
+BASE = pathlib.Path(__file__).parent
+PAIRS_PATH = BASE / "pairs.json"
+
+# Tek sefer yükle
+with open(PAIRS_PATH, "r", encoding="utf-8") as f:
+    PAIRS_CFG = json.load(f)
+
+def get_alert(pair_symbol: str, key: str) -> str:
+    """
+    key: 'enter_long' | 'exit_long' | 'enter_short' | 'exit_short' | 'exit_all'
+    """
+    for p in PAIRS_CFG.get("pairs", []):
+        if p.get("symbol") == pair_symbol and p.get("enabled", True):
+            return p["alerts"][key]
+    raise ValueError(f"Alert not found: {pair_symbol} / {key}")
+
+def send_wt(code: str, quote_amount: float = 10):
+    payload = {
+        "code": code,                          # WT botundaki uzun string ile birebir
+        "orderType": "market",
+        "amountPerTradeType": "quote",
+        "amountPerTrade": float(quote_amount),
+    }
+    # Teşhis için net log:
+    print("WT payload:", json.dumps(payload, ensure_ascii=False))
+    r = requests.post(WT_URL, json=payload, timeout=10)  # DİKKAT: json=payload
+    print("WT status:", r.status_code, "resp:", r.text)
+    r.raise_for_status()
+# --- /WT Client ---
+
+
 # Environment
 load_dotenv()
 WEBHOOK_URL = os.getenv('WUNDERTRADING_WEBHOOK_URL', '')

@@ -1,0 +1,21 @@
+{
+  "symbol": "ARBUSDT",
+  "timeframe": "5m",
+  "enabled": true,
+  "alerts": {
+    "enter_long":  "ENTER-LONG_BINANCE_ARBUSDT_render-arb-5m_5M_abcd1234",
+    "exit_long":   "EXIT-LONG_BINANCE_ARBUSDT_render-arb-5m_5M_abcd1234",
+    "enter_short": "ENTER-SHORT_BINANCE_ARBUSDT_render-arb-5m_5M_abcd1234",
+    "exit_short":  "EXIT-SHORT_BINANCE_ARBUSDT_render-arb-5m_5M_abcd1234",
+    "exit_all":    "EXIT-ALL_BINANCE_ARBUSDT_render-arb-5m_5M_abcd1234"
+  },
+  "strategy": {
+    "type": "wt_cross",
+    "mode": "dual_filtered",
+    "n1": 10,
+    "n2": 21,
+    "obLevel2": 53,
+    "osLevel2": -53,
+    "enter_exit": false
+  }
+}

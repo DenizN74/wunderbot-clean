@@ -267,18 +267,18 @@ def check_pair(pair):
         logger.info(f"📊 {symbol} | {signal} @ ${price:.4f} | {result.get('reason', '')}")
         
         # Alert gönder
-        if signal == 'ENTER-LONG' and 'enter_long' in alerts:
-            send_alert(symbol, signal, alerts['enter_long'], price)
-            bot_state['total_signals'] += 1
-        elif signal == 'EXIT-LONG' and 'exit_long' in alerts:
-            send_alert(symbol, signal, alerts['exit_long'], price)
-            bot_state['total_signals'] += 1
-        elif signal == 'ENTER-SHORT' and 'enter_short' in alerts:
-            send_alert(symbol, signal, alerts['enter_short'], price)
-            bot_state['total_signals'] += 1
-        elif signal == 'EXIT-SHORT' and 'exit_short' in alerts:
-            send_alert(symbol, signal, alerts['exit_short'], price)
-            bot_state['total_signals'] += 1
+       if signal == 'ENTER-LONG' and 'enter_long' in alerts:
+    send_wt(alerts['enter_long'], quote_amount=10)
+
+elif signal == 'EXIT-LONG' and 'exit_long' in alerts:
+    send_wt(alerts['exit_long'], quote_amount=10)
+
+elif signal == 'ENTER-SHORT' and 'enter_short' in alerts:
+    send_wt(alerts['enter_short'], quote_amount=10)
+
+elif signal == 'EXIT-SHORT' and 'exit_short' in alerts:
+    send_wt(alerts['exit_short'], quote_amount=10)
+
         
     except Exception as e:
         logger.error(f"❌ {symbol} error: {e}")

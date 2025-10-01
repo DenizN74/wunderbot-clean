@@ -192,14 +192,10 @@ def send_alert(symbol, signal, alert_text, price):
             return False
     
 try:
-    # Plain text
-    response = requests.post(
-        WEBHOOK_URL, 
-        data=alert_text,
-        headers={'Content-Type': 'text/plain'},
-        timeout=10
-    )
-    )
+    # JSON format (WunderTrading'de JSON seçili olduğu için)
+    payload = {'alert': alert_text}
+    response = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+    
         
         if response.status_code == 200:
             logger.info(f"✅ {symbol} | {signal} @ ${price:.4f} | Alert sent: {alert_text}")

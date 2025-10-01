@@ -174,7 +174,6 @@ def analyze(df, config):
 # ═══════════════════════════════════════════════════════════════════════
 
 def send_alert(symbol, signal, alert_text, price):
-    """WunderTrading'e alert gönderir"""
     if not WEBHOOK_URL:
         logger.warning("Webhook URL tanımlı değil!")
         return False
@@ -182,7 +181,6 @@ def send_alert(symbol, signal, alert_text, price):
     if signal == 'HOLD':
         return False
     
-    # Aynı alert'i tekrar gönderme (son 5 dakika içinde)
     alert_key = f"{symbol}_{signal}_{alert_text}"
     now = datetime.now()
     if alert_key in sent_alerts:
@@ -191,10 +189,9 @@ def send_alert(symbol, signal, alert_text, price):
             logger.info(f"⏸️  {symbol} | {signal} @ ${price:.4f} | Alert recently sent, skipping")
             return False
     
-  try:
-    # Form-data format (application/x-www-form-urlencoded)
-    payload = {'alert': alert_text}
-    response = requests.post(WEBHOOK_URL, data=payload, timeout=10)
+    try:
+        payload = {'alert': alert_text}
+        response = requests.post(WEBHOOK_URL, data=payload, timeout=10)
         
         if response.status_code == 200:
             logger.info(f"✅ {symbol} | {signal} @ ${price:.4f} | Alert sent: {alert_text}")
@@ -203,7 +200,6 @@ def send_alert(symbol, signal, alert_text, price):
         else:
             logger.error(f"❌ Alert error: {response.status_code} | {response.text[:100]}")
             return False
-            
     except Exception as e:
         logger.error(f"❌ Alert send error: {e}")
         return False

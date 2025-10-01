@@ -34,13 +34,13 @@ def send_wt(code: str, extra=None):
     if extra and isinstance(extra, dict):
         payload.update(extra)
     try:
-        print("WT payload:", json.dumps(payload, ensure_ascii=False))
+        logger.info(f"📤 WT'ye gönderiliyor: {code}")
         r = requests.post(WT_URL, json=payload, timeout=10)
         body = r.text if hasattr(r, "text") else "<no text>"
-        print("WT status:", r.status_code, "resp:", body)
+        logger.info(f"✅ WT yanıtı [HTTP {r.status_code}]: {body}")
         r.raise_for_status()
     except Exception as e:
-        logger.error(f"WT send error: {e}")
+        logger.error(f"❌ WT send error: {e}")
         raise
 
 # ============== HELPERS ==============
@@ -53,7 +53,6 @@ def _as_int(v, default=0):
     try:
         s = str(v).strip()
         if s == "": return default
-        # Türkçe locale virgülünü de destekle
         s = s.replace(",", ".")
         return int(float(s))
     except Exception:
@@ -83,19 +82,29 @@ def load_pairs():
     sheet_url = os.getenv("SHEET_URL")
     if sheet_url:
         try:
-            # Google Sheets "Web'de yayınla (CSV)" linkini doğrudan kullan
+            logger.info(f"📥 Google Sheets'den config çekiliyor: {sheet_url[:60]}...")
             resp = requests.get(sheet_url, timeout=10)
             resp.raise_for_status()
             reader = csv.DictReader(resp.text.splitlines())
 
+            row_count = 0
+            enabled_count = 0
+            
             for row in reader:
+                row_count += 1
                 symbol = (row.get("symbol") or "").strip().upper()
                 if not symbol:
                     continue
                 if not _as_bool(row.get("enabled"), False):
                     continue
 
+                enabled_count += 1
                 timeframe = (row.get("timeframe") or "15m").strip()
+                
+                # Başlangıç pozisyonu (yeni sütun)
+                initial_pos = (row.get("initial_position") or "NONE").strip().upper()
+                if initial_pos not in ["LONG", "SHORT", "NONE"]:
+                    initial_pos = "NONE"
 
                 strategy = {
                     "type": (row.get("strategy.type") or "tmh").strip().lower(),
@@ -131,29 +140,39 @@ def load_pairs():
                 }
 
                 pairs.append({
-                    "symbol":    symbol,
-                    "timeframe": timeframe,
-                    "enabled":   True,
-                    "strategy":  strategy,
-                    "alerts":    alerts,
+                    "symbol":           symbol,
+                    "timeframe":        timeframe,
+                    "enabled":          True,
+                    "initial_position": initial_pos,  # ← YENİ ALAN
+                    "strategy":         strategy,
+                    "alerts":           alerts,
                 })
 
+            logger.info(f"✅ Google Sheets: {row_count} satır okundu, {enabled_count} parite aktif")
+            
             if pairs:
                 return pairs
             else:
-                logger.warning("[sheet] Yayınlanmış CSV boş ya da hiç 'enabled' satır yok. configs/ → pairs.json'a düşüyorum.")
+                logger.warning("⚠️  Google Sheets boş veya hiç 'enabled=TRUE' satır yok. configs/ → pairs.json'a düşüyorum.")
 
         except Exception as e:
-            logger.error(f"[sheet] Okuma hatası, configs/ yoluna düşüyorum: {e}")
+            logger.error(f"❌ Google Sheets okuma hatası: {e}")
+            logger.warning("⚠️  configs/ dizinine düşülüyor...")
 
     # 2) configs/*.json — mevcut sistem
     cfg_dir = BASE / "configs"
     if cfg_dir.exists():
-        for pth in sorted(glob.glob(str(cfg_dir / "*.json"))):
+        json_files = sorted(glob.glob(str(cfg_dir / "*.json")))
+        if json_files:
+            logger.info(f"📂 configs/ dizininden {len(json_files)} JSON dosyası okunuyor...")
+        for pth in json_files:
             try:
                 with open(pth, "r", encoding="utf-8") as f:
                     obj = json.load(f)
                 if obj.get("enabled", True):
+                    # JSON'da initial_position yoksa NONE varsayılan
+                    if "initial_position" not in obj:
+                        obj["initial_position"] = "NONE"
                     pairs.append(obj)
             except Exception as e:
                 logger.error(f"[config] {pth} okunamadı: {e}")
@@ -164,32 +183,34 @@ def load_pairs():
     legacy = BASE / "pairs.json"
     if legacy.exists():
         try:
+            logger.info("📄 Legacy pairs.json dosyası okunuyor...")
             with open(legacy, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            pairs = [p for p in data.get("pairs", []) if p.get("enabled", True)]
+            for p in data.get("pairs", []):
+                if p.get("enabled", True):
+                    if "initial_position" not in p:
+                        p["initial_position"] = "NONE"
+                    pairs.append(p)
             return pairs
         except Exception as e:
             logger.error(f"[pairs.json] okunamadı: {e}")
 
-    return pairs  # tamamen boşsa da boş liste dön
+    return pairs
 
 # ============== STRATEGY DISPATCHER ==============
 try:
-    # strategies/ package’ı varsa kullan
     from strategies import run as run_strategy
 except Exception:
     run_strategy = None
 
 def analyze_dispatch(df: pd.DataFrame, config: dict):
-    """config['type']'a göre ilgili stratejiyi çağırır.
-       strategies yoksa 'tmh' yerinde basit FALLBACK kullanır."""
+    """config['type']'a göre ilgili stratejiyi çağırır."""
     stype = (config.get("type") or "tmh").lower()
 
-    if run_strategy:  # modüler yol
+    if run_strategy:
         return run_strategy(stype, df, config)
 
     # ---- FALLBACK (strategies klasörü yoksa) ----
-    # Basitleştirilmiş “tmh” (EMA+Supertrend).
     def ema(s, n): return s.ewm(span=n, adjust=False).mean()
 
     def atr(df_, n=14):
@@ -260,14 +281,13 @@ def get_klines(symbol, timeframe, limit=200):
         return pd.DataFrame()
 
 # ============== POSITION STATE & DEBOUNCE ==============
-# pair_key -> {"pos": "NONE|LONG|SHORT", "last_sig": "ENTER-LONG|EXIT-LONG|...", "ts": epoch}
 pos_state = {}
 
 def key_of(pair):
     return f"{pair['symbol']}@{pair['timeframe']}"
 
 def can_send(pair_key, signal, cooldown_sec=90):
-    """Aynı sinyali belirli süre içinde tekrar yollama (spam önleyici)."""
+    """Aynı sinyali belirli süre içinde tekrar yollama."""
     st = pos_state.get(pair_key, {"pos":"NONE","last_sig":None,"ts":0})
     if st.get("last_sig") == signal and (time() - st.get("ts",0)) < cooldown_sec:
         return False
@@ -277,13 +297,48 @@ def update_after_send(pair_key, signal):
     st = pos_state.setdefault(pair_key, {"pos":"NONE","last_sig":None,"ts":0})
     st["last_sig"] = signal
     st["ts"] = time()
-    # pozisyon değişimi
     if signal == "ENTER-LONG":
         st["pos"] = "LONG"
     elif signal == "ENTER-SHORT":
         st["pos"] = "SHORT"
     elif signal in ("EXIT-LONG","EXIT-SHORT","EXIT-ALL"):
         st["pos"] = "NONE"
+
+# ============== POZISYON SENKRONIZASYONU ==============
+def sync_positions_from_sheet():
+    """
+    Google Sheets'deki 'initial_position' sütununu okuyarak
+    bot başlangıç pozisyonlarını otomatik olarak ayarla.
+    """
+    try:
+        pairs = load_pairs()
+        if not pairs:
+            logger.warning("⚠️  Hiç parite bulunamadı, pozisyon senkronizasyonu atlanıyor.")
+            return
+
+        logger.info("🔄 Başlangıç pozisyonları Google Sheets'den yükleniyor...")
+        
+        synced = 0
+        for pair in pairs:
+            pair_key = key_of(pair)
+            initial_pos = pair.get("initial_position", "NONE")
+            
+            pos_state[pair_key] = {
+                "pos": initial_pos,
+                "last_sig": None,
+                "ts": 0
+            }
+            
+            if initial_pos != "NONE":
+                logger.info(f"  ├─ {pair_key}: {initial_pos} ✓")
+                synced += 1
+            else:
+                logger.info(f"  ├─ {pair_key}: NONE")
+        
+        logger.info(f"✅ Pozisyon senkronizasyonu tamamlandı ({synced}/{len(pairs)} pozisyon aktif)")
+        
+    except Exception as e:
+        logger.error(f"❌ Pozisyon senkronizasyonu hatası: {e}")
 
 # ============== CORE LOOP ==============
 app = Flask(__name__)
@@ -301,54 +356,61 @@ def check_pair(pair: dict):
         if df.empty:
             return
 
-        # Bar kapanışında mı tetikleyeceğiz?
-        use_closed = bool(config.get("signal_on_close", True))  # default: kapanışta
+        use_closed = bool(config.get("signal_on_close", True))
         df_in = df.iloc[:-1] if (use_closed and len(df) > 1) else df
 
         result = analyze_dispatch(df_in, config)
         signal = result["signal"]
         price  = float(result.get("price", df_in["close"].iloc[-1]))
-        logger.info(f"📊 {symbol} [{stype}] | {signal} @ ${price:.4f}")
-
+        
         pair_key = key_of(pair)
         st = pos_state.setdefault(pair_key, {"pos":"NONE","last_sig":None,"ts":0})
         pos = st["pos"]
+        
+        logger.info(f"📊 {symbol} [{stype}] | {signal} @ ${price:.4f} | Pozisyon: {pos}")
 
-        if signal == "ENTER-LONG" and "enter_long" in alerts:
+        # Alert kontrolü
+        if signal == "ENTER-LONG" and alerts.get("enter_long"):
             if pos != "LONG" and can_send(pair_key, signal):
-                send_wt(alerts["enter_long"]); update_after_send(pair_key, signal)
+                send_wt(alerts["enter_long"])
+                update_after_send(pair_key, signal)
 
-        elif signal == "ENTER-SHORT" and "enter_short" in alerts:
+        elif signal == "ENTER-SHORT" and alerts.get("enter_short"):
             if pos != "SHORT" and can_send(pair_key, signal):
-                send_wt(alerts["enter_short"]); update_after_send(pair_key, signal)
+                send_wt(alerts["enter_short"])
+                update_after_send(pair_key, signal)
 
-        elif signal == "EXIT-LONG" and "exit_long" in alerts:
+        elif signal == "EXIT-LONG" and alerts.get("exit_long"):
             if pos == "LONG" and can_send(pair_key, signal):
-                send_wt(alerts["exit_long"]); update_after_send(pair_key, signal)
+                send_wt(alerts["exit_long"])
+                update_after_send(pair_key, signal)
 
-        elif signal == "EXIT-SHORT" and "exit_short" in alerts:
+        elif signal == "EXIT-SHORT" and alerts.get("exit_short"):
             if pos == "SHORT" and can_send(pair_key, signal):
-                send_wt(alerts["exit_short"]); update_after_send(pair_key, signal)
-
-        # EXIT-ALL kullanıyorsan şuna benzer guard ekleyebilirsin:
-        # elif signal == "EXIT-ALL" and "exit_all" in alerts:
-        #     if pos != "NONE" and can_send(pair_key, signal):
-        #         send_wt(alerts["exit_all"]); update_after_send(pair_key, signal)
+                send_wt(alerts["exit_short"])
+                update_after_send(pair_key, signal)
 
     except Exception as e:
-        logger.error(f"❌ {symbol} error: {e}")
+        logger.error(f"❌ {symbol} hatası: {e}")
 
 def check_all_pairs():
     try:
         pairs = load_pairs()
         if not pairs:
-            logger.warning("Aktif parite bulunamadı"); return
+            logger.warning("⚠️  Aktif parite bulunamadı")
+            return
+            
         logger.info(f"🔄 {len(pairs)} parite kontrol ediliyor...")
         bot_state["last_check"] = datetime.now().isoformat()
+        
         threads = []
         for p in pairs:
-            t = Thread(target=check_pair, args=(p,)); t.start(); threads.append(t)
-        for t in threads: t.join()
+            t = Thread(target=check_pair, args=(p,))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
+            
         logger.info("✅ Kontrol tamamlandı")
     except Exception as e:
         logger.error(f"❌ Genel hata: {e}")
@@ -365,24 +427,54 @@ def status():
 @app.get("/pairs")
 def pairs_view():
     try:
-        return jsonify({"pairs": load_pairs()})
+        pairs = load_pairs()
+        return jsonify({
+            "count": len(pairs),
+            "pairs": pairs
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/positions")
+def positions_view():
+    """Mevcut pozisyon durumlarını göster"""
+    try:
+        return jsonify({
+            "count": len(pos_state),
+            "positions": pos_state
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 def start_scheduler():
     sch = BackgroundScheduler()
-    sch.add_job(func=check_all_pairs, trigger="interval", seconds=CHECK_INTERVAL,
-                id="check_pairs", replace_existing=True)
+    sch.add_job(
+        func=check_all_pairs,
+        trigger="interval",
+        seconds=CHECK_INTERVAL,
+        id="check_pairs",
+        replace_existing=True
+    )
     sch.start()
     logger.info(f"⏰ Scheduler başlatıldı ({CHECK_INTERVAL}s)")
 
 if __name__ == "__main__":
-    logger.info("="*60); logger.info("🤖 WunderBot Starting..."); logger.info("="*60)
+    logger.info("="*60)
+    logger.info("🤖 WunderBot Starting...")
+    logger.info("="*60)
+    
     bot_state["running"] = True
     bot_state["start_time"] = datetime.now().isoformat()
+    
+    # Başlangıç pozisyonlarını Google Sheets'den oku
+    sync_positions_from_sheet()
+    
+    # İlk kontrol
     check_all_pairs()
+    
+    # Scheduler başlat
     start_scheduler()
+    
     port = int(os.getenv("PORT", 5000))
-    logger.info(f"🌐 Server: http://0.0.0.0:{port}")
+    logger.info(f"🌐 Server başlatıldı: http://0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
-

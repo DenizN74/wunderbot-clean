@@ -4,6 +4,7 @@
 import os, json, logging, glob, pathlib
 from datetime import datetime
 from threading import Thread
+from time import time
 
 import pandas as pd
 import requests
@@ -19,22 +20,28 @@ CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    datefmt="%(Y)s-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("wunderbot")
 
 # ============== WT CLIENT ==============
 WT_URL = "https://wtalerts.com/bot/custom"
 
-def send_wt(code: str, extra: dict | None = None):
+def send_wt(code: str, extra=None):
     """Sadece code gönder. Miktar/lev WT tarafında ayarlı."""
+    code = (code or "").strip()
     payload = {"code": code}
-    if extra:
+    if extra and isinstance(extra, dict):
         payload.update(extra)
-    print("WT payload:", json.dumps(payload, ensure_ascii=False))
-    r = requests.post(WT_URL, json=payload, timeout=10)
-    print("WT status:", r.status_code, "resp:", r.text)
-    r.raise_for_status()
+    try:
+        print("WT payload:", json.dumps(payload, ensure_ascii=False))
+        r = requests.post(WT_URL, json=payload, timeout=10)
+        body = r.text if hasattr(r, "text") else "<no text>"
+        print("WT status:", r.status_code, "resp:", body)
+        r.raise_for_status()
+    except Exception as e:
+        logger.error(f"WT send error: {e}")
+        raise
 
 # ============== CONFIG LOADER ==============
 BASE = pathlib.Path(__file__).parent
@@ -67,7 +74,7 @@ def load_pairs():
 try:
     # strategies/ package’ı varsa kullan
     from strategies import run as run_strategy
-except Exception as _:
+except Exception:
     run_strategy = None
 
 def analyze_dispatch(df: pd.DataFrame, config: dict):
@@ -79,7 +86,7 @@ def analyze_dispatch(df: pd.DataFrame, config: dict):
         return run_strategy(stype, df, config)
 
     # ---- FALLBACK (strategies klasörü yoksa) ----
-    # Basitleştirilmiş “tmh” (EMA+Supertrend+WT).
+    # Basitleştirilmiş “tmh” (EMA+Supertrend).
     def ema(s, n): return s.ewm(span=n, adjust=False).mean()
 
     def atr(df_, n=14):
@@ -111,7 +118,7 @@ def analyze_dispatch(df: pd.DataFrame, config: dict):
     ema_s = ema(df["close"], int(config.get("ema_slow", 26)))
     _, st_dir = supertrend(df, int(config.get("supertrend_period", 10)), float(config.get("supertrend_multiplier", 2.0)))
 
-    close = df["close"].iloc[-1]
+    close = float(df["close"].iloc[-1])
     emaBull = (ema_f.iloc[-1] > ema_s.iloc[-1]) and (close > ema_f.iloc[-1])
     emaBear = (ema_f.iloc[-1] < ema_s.iloc[-1]) and (close < ema_f.iloc[-1])
     stBull  = st_dir.iloc[-1] == 1
@@ -149,6 +156,32 @@ def get_klines(symbol, timeframe, limit=200):
         logger.error(f"Veri çekme hatası ({symbol}): {e}")
         return pd.DataFrame()
 
+# ============== POSITION STATE & DEBOUNCE ==============
+# pair_key -> {"pos": "NONE|LONG|SHORT", "last_sig": "ENTER-LONG|EXIT-LONG|...", "ts": epoch}
+pos_state = {}
+
+def key_of(pair):
+    return f"{pair['symbol']}@{pair['timeframe']}"
+
+def can_send(pair_key, signal, cooldown_sec=90):
+    """Aynı sinyali belirli süre içinde tekrar yollama (spam önleyici)."""
+    st = pos_state.get(pair_key, {"pos":"NONE","last_sig":None,"ts":0})
+    if st.get("last_sig") == signal and (time() - st.get("ts",0)) < cooldown_sec:
+        return False
+    return True
+
+def update_after_send(pair_key, signal):
+    st = pos_state.setdefault(pair_key, {"pos":"NONE","last_sig":None,"ts":0})
+    st["last_sig"] = signal
+    st["ts"] = time()
+    # pozisyon değişimi
+    if signal == "ENTER-LONG":
+        st["pos"] = "LONG"
+    elif signal == "ENTER-SHORT":
+        st["pos"] = "SHORT"
+    elif signal in ("EXIT-LONG","EXIT-SHORT","EXIT-ALL"):
+        st["pos"] = "NONE"
+
 # ============== CORE LOOP ==============
 app = Flask(__name__)
 bot_state = {"running": False, "start_time": None, "last_check": None}
@@ -162,20 +195,42 @@ def check_pair(pair: dict):
 
     try:
         df = get_klines(symbol, tf)
-        if df.empty: return
+        if df.empty:
+            return
 
-        result = analyze_dispatch(df, config)
-        signal = result["signal"]; price = float(result.get("price", df["close"].iloc[-1]))
+        # Bar kapanışında mı tetikleyeceğiz?
+        use_closed = bool(config.get("signal_on_close", True))  # default: kapanışta
+        df_in = df.iloc[:-1] if (use_closed and len(df) > 1) else df
+
+        result = analyze_dispatch(df_in, config)
+        signal = result["signal"]
+        price  = float(result.get("price", df_in["close"].iloc[-1]))
         logger.info(f"📊 {symbol} [{stype}] | {signal} @ ${price:.4f}")
 
+        pair_key = key_of(pair)
+        st = pos_state.setdefault(pair_key, {"pos":"NONE","last_sig":None,"ts":0})
+        pos = st["pos"]
+
         if signal == "ENTER-LONG" and "enter_long" in alerts:
-            send_wt(alerts["enter_long"])
-        elif signal == "EXIT-LONG" and "exit_long" in alerts:
-            send_wt(alerts["exit_long"])
+            if pos != "LONG" and can_send(pair_key, signal):
+                send_wt(alerts["enter_long"]); update_after_send(pair_key, signal)
+
         elif signal == "ENTER-SHORT" and "enter_short" in alerts:
-            send_wt(alerts["enter_short"])
+            if pos != "SHORT" and can_send(pair_key, signal):
+                send_wt(alerts["enter_short"]); update_after_send(pair_key, signal)
+
+        elif signal == "EXIT-LONG" and "exit_long" in alerts:
+            if pos == "LONG" and can_send(pair_key, signal):
+                send_wt(alerts["exit_long"]); update_after_send(pair_key, signal)
+
         elif signal == "EXIT-SHORT" and "exit_short" in alerts:
-            send_wt(alerts["exit_short"])
+            if pos == "SHORT" and can_send(pair_key, signal):
+                send_wt(alerts["exit_short"]); update_after_send(pair_key, signal)
+
+        # EXIT-ALL kullanırsan şuna benzer guard ekleyebilirsin:
+        # elif signal == "EXIT-ALL" and "exit_all" in alerts:
+        #     if pos != "NONE" and can_send(pair_key, signal):
+        #         send_wt(alerts["exit_all"]); update_after_send(pair_key, signal)
 
     except Exception as e:
         logger.error(f"❌ {symbol} error: {e}")
@@ -197,10 +252,12 @@ def check_all_pairs():
 
 # ============== FLASK & SCHEDULER ==============
 @app.get("/health")
-def health(): return jsonify({"status":"ok", "running": bot_state["running"]})
+def health():
+    return jsonify({"status":"ok", "running": bot_state["running"]})
 
 @app.get("/status")
-def status(): return jsonify(bot_state)
+def status():
+    return jsonify(bot_state)
 
 @app.get("/pairs")
 def pairs_view():

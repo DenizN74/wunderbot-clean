@@ -191,9 +191,10 @@ def send_alert(symbol, signal, alert_text, price):
             logger.info(f"⏸️  {symbol} | {signal} @ ${price:.4f} | Alert recently sent, skipping")
             return False
     
-    try:
-        payload = {'alert': alert_text}
-        response = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+  try:
+    # Form-data format (application/x-www-form-urlencoded)
+    payload = {'alert': alert_text}
+    response = requests.post(WEBHOOK_URL, data=payload, timeout=10)
         
         if response.status_code == 200:
             logger.info(f"✅ {symbol} | {signal} @ ${price:.4f} | Alert sent: {alert_text}")

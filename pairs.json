@@ -5,10 +5,10 @@
       "timeframe": "15m",
       "enabled": true,
       "alerts": {
-        "enter_long": "ENTER-LONG_BINANCE_SOLUSDT_render-sol-15m_15M_0d128ac24c941455",
-        "exit_long": "EXIT-LONG_BINANCE_SOLUSDT_render-sol-15m_15M_0d128ac24c941455",
-        "enter_short": "ENTER-SHORT_BINANCE_SOLUSDT_render-sol-15m_15M_0d128ac24c941455",
-        "exit_short": "EXIT-SHORT_BINANCE_SOLUSDT_render-sol-15m_15M_0d128ac24c941455"
+        "enter_long": "ENTER_LONG",
+        "exit_long": "EXIT_LONG",
+        "enter_short": "ENTER_SHORT",
+        "exit_short": "EXIT_SHORT"
       },
       "strategy": {
         "ema_fast": 12,

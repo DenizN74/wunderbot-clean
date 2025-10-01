@@ -191,16 +191,15 @@ def send_alert(symbol, signal, alert_text, price):
             logger.info(f"⏸️  {symbol} | {signal} @ ${price:.4f} | Alert recently sent, skipping")
             return False
     
-   try:
-    # URL-encoded format
-    import urllib.parse
-    payload_str = urllib.parse.urlencode({'alert': alert_text})
+ try:
+    # JSON format
+    payload = {'alert': alert_text}
     
     response = requests.post(
         WEBHOOK_URL, 
-        data=payload_str,
-        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        json=payload,  # data= yerine json= kullan
         timeout=10
+    )
     )
         
         if response.status_code == 200:

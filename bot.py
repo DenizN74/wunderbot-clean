@@ -187,15 +187,13 @@ def send_alert(symbol, signal, alert_text, price):
     now = datetime.now()
     if alert_key in sent_alerts:
         last_sent = sent_alerts[alert_key]
-        if (now - last_sent).seconds < 300:  # 5 dakika
+        if (now - last_sent).seconds < 300:
             logger.info(f"⏸️  {symbol} | {signal} @ ${price:.4f} | Alert recently sent, skipping")
             return False
     
-try:
-    # JSON format (WunderTrading'de JSON seçili olduğu için)
-    payload = {'alert': alert_text}
-    response = requests.post(WEBHOOK_URL, json=payload, timeout=10)
-    
+    try:
+        payload = {'alert': alert_text}
+        response = requests.post(WEBHOOK_URL, json=payload, timeout=10)
         
         if response.status_code == 200:
             logger.info(f"✅ {symbol} | {signal} @ ${price:.4f} | Alert sent: {alert_text}")
